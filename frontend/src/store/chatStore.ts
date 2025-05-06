@@ -1,96 +1,256 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import axios from 'axios';
 
-interface Message {
-  id: number;
+// API endpoints
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+const API = {
+  GET_CONVERSATIONS: `${API_URL}/api/chat/conversations`,
+  GET_CONVERSATION: `${API_URL}/api/chat/conversation`,
+  CREATE_CONVERSATION: `${API_URL}/api/chat/conversation`,
+  SEND_MESSAGE: `${API_URL}/api/chat/message`,
+  DELETE_CONVERSATION: `${API_URL}/api/chat/conversation`
+};
+
+export interface Message {
+  role: 'user' | 'assistant' | 'system';
   content: string;
-  isUser: boolean;
-  timestamp: string;
+  created_at?: string;
 }
 
-interface Chat {
-  id: number;
+export interface Conversation {
+  _id: string;
   title: string;
-  time: string;
+  user_id: string;
   messages: Message[];
+  knowledge_base_id?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 interface ChatStore {
-  recentChats: Chat[];
-  currentChatId: number | null;
-  addChat: (chat: Omit<Chat, 'id'>) => void;
-  removeChat: (id: number) => void;
-  setCurrentChat: (id: number) => void;
-  addMessage: (chatId: number, message: Omit<Message, 'id'>) => void;
+  conversations: Conversation[];
+  currentConversationId: string | null;
+  isLoading: boolean;
+  error: string | null;
+  
+  // API actions
+  fetchConversations: (userId?: string) => Promise<void>;
+  fetchConversation: (id: string) => Promise<Conversation | null>;
+  createConversation: (title?: string) => Promise<string | null>;
+  sendMessage: (message: string, conversationId?: string) => Promise<void>;
+  deleteConversation: (id: string) => Promise<void>;
+  
+  // Local actions
+  setCurrentConversation: (id: string | null) => void;
+  setLoading: (isLoading: boolean) => void;
+  setError: (error: string | null) => void;
+  clearError: () => void;
 }
 
 export const useChatStore = create<ChatStore>()(
   persist(
-    (set) => ({
-  recentChats: [
+    (set, get) => ({
+      conversations: [],
+      currentConversationId: null,
+      isLoading: false,
+      error: null,
+      
+      fetchConversations: async (userId = 'default_user') => {
+        set({ isLoading: true, error: null });
+        try {
+          const response = await axios.get(`${API.GET_CONVERSATIONS}?user_id=${userId}`);
+          set({ conversations: response.data, isLoading: false });
+        } catch (error) {
+          console.error('Error fetching conversations:', error);
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to fetch conversations', 
+            isLoading: false 
+          });
+        }
+      },
+      
+      fetchConversation: async (id) => {
+        set({ isLoading: true, error: null });
+        try {
+          const response = await axios.get(`${API.GET_CONVERSATION}/${id}`);
+          
+          // Update the conversation in the store
+          set((state) => ({
+            conversations: state.conversations.map(conv => 
+              conv._id === id ? response.data : conv
+            ),
+            isLoading: false
+          }));
+          
+          return response.data;
+        } catch (error) {
+          console.error('Error fetching conversation:', error);
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to fetch conversation', 
+            isLoading: false 
+          });
+          return null;
+        }
+      },
+      
+      createConversation: async (title = 'New Conversation') => {
+        set({ isLoading: true, error: null });
+        try {
+          const response = await axios.post(API.CREATE_CONVERSATION, {
+            title,
+            user_id: 'default_user' // In a real app, get from authentication
+          });
+          
+          // Add the new conversation to the store
+          set((state) => ({
+            conversations: [response.data, ...state.conversations],
+            currentConversationId: response.data._id,
+            isLoading: false
+          }));
+          
+          return response.data._id;
+        } catch (error) {
+          console.error('Error creating conversation:', error);
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to create conversation', 
+            isLoading: false 
+          });
+          return null;
+        }
+      },
+      
+      sendMessage: async (message, conversationId) => {
+        const currentId = conversationId || get().currentConversationId;
+        
+        if (!message.trim()) {
+          set({ error: 'Message cannot be empty' });
+          return;
+        }
+        
+        set({ isLoading: true, error: null });
+        
+        try {
+          // Optimistically update UI
+          const tempId = Date.now().toString();
+          
+          // If we have an existing conversation
+          if (currentId) {
+            set((state) => ({
+              conversations: state.conversations.map(conv => 
+                conv._id === currentId 
+                  ? { 
+                      ...conv,
+                      messages: [...conv.messages, { role: 'user', content: message }],
+                      updated_at: new Date().toISOString()
+                    }
+                  : conv
+              ),
+            }));
+          } else {
+            // Create a temporary conversation locally until we get response
+            const tempConversation: Conversation = {
+              _id: tempId,
+              title: message.substring(0, 30) + (message.length > 30 ? '...' : ''),
+              user_id: 'default_user',
+              messages: [{ role: 'user', content: message }],
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+            
+            set((state) => ({
+              conversations: [tempConversation, ...state.conversations],
+              currentConversationId: tempId
+            }));
+          }
+          
+          // Send to API
+          const response = await axios.post(API.SEND_MESSAGE, {
+            conversation_id: currentId,
+            message: message,
+            user_id: 'default_user' // In a real app, get from authentication
+          });
+          
+          // Update with actual response
+          if (currentId) {
+            // Existing conversation - add assistant response
+            set((state) => ({
+              conversations: state.conversations.map(conv => 
+                conv._id === currentId 
+                  ? { 
+                      ...conv,
+                      messages: [...conv.messages, { 
+                        role: 'assistant', 
+                        content: response.data.message 
+                      }],
+                      updated_at: response.data.updated_at
+                    }
+                  : conv
+              ),
+              isLoading: false
+            }));
+          } else {
+            // New conversation - update from temporary ID to real ID
+            const realId = response.data.conversation_id;
+            
+            set((state) => ({
+              conversations: state.conversations.map(conv => 
+                conv._id === tempId 
+                  ? { 
+                      ...conv,
+                      _id: realId,
+                      messages: [...conv.messages, { 
+                        role: 'assistant', 
+                        content: response.data.message 
+                      }],
+                      updated_at: response.data.updated_at
+                    }
+                  : conv
+              ),
+              currentConversationId: realId,
+              isLoading: false
+            }));
+          }
+        } catch (error) {
+          console.error('Error sending message:', error);
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to send message', 
+            isLoading: false 
+          });
+        }
+      },
+      
+      deleteConversation: async (id) => {
+        set({ isLoading: true, error: null });
+        try {
+          await axios.delete(`${API.DELETE_CONVERSATION}/${id}`);
+          
+          // Remove the conversation from the store
+          set((state) => ({
+            conversations: state.conversations.filter(conv => conv._id !== id),
+            currentConversationId: state.currentConversationId === id ? null : state.currentConversationId,
+            isLoading: false
+          }));
+        } catch (error) {
+          console.error('Error deleting conversation:', error);
+          set({ 
+            error: error instanceof Error ? error.message : 'Failed to delete conversation', 
+            isLoading: false 
+          });
+        }
+      },
+      
+      setCurrentConversation: (id) => set({ currentConversationId: id }),
+      setLoading: (isLoading) => set({ isLoading }),
+      setError: (error) => set({ error }),
+      clearError: () => set({ error: null })
+    }),
     {
-      id: 1,
-      title: 'Project Discussion',
-      time: '2 hours ago',
-      messages: [
-        { id: 1, content: 'What are the project requirements?', isUser: true, timestamp: '2:30 PM' },
-        { id: 2, content: 'The project requires building a chat interface with Next.js and Zustand.', isUser: false, timestamp: '2:32 PM' }
-      ]
-    },
-    {
-      id: 2,
-      title: 'Meeting Notes',
-      time: 'Yesterday',
-      messages: [
-        { id: 1, content: 'Can you summarize the meeting?', isUser: true, timestamp: '10:00 AM' },
-        { id: 2, content: 'We discussed the UI design and agreed on a minimalist approach.', isUser: false, timestamp: '10:02 AM' }
-      ]
-    },
-    {
-      id: 3,
-      title: 'Document Review',
-      time: '2 days ago',
-      messages: [
-        { id: 1, content: 'Please review the technical specifications', isUser: true, timestamp: '3:15 PM' },
-        { id: 2, content: 'I\'ve reviewed the specs and have some suggestions for improvement.', isUser: false, timestamp: '3:20 PM' }
-      ]
-    },
-    {
-      id: 4,
-      title: 'Brainstorming',
-      time: 'Last week',
-      messages: [
-        { id: 1, content: 'Let\'s brainstorm some feature ideas', isUser: true, timestamp: '11:00 AM' },
-        { id: 2, content: 'How about adding message reactions and threading?', isUser: false, timestamp: '11:05 AM' }
-      ]
+      name: 'chat-storage',
+      partialize: (state) => ({
+        conversations: state.conversations,
+        currentConversationId: state.currentConversationId
+      })
     }
-  ],
-  currentChatId: null,
-  addChat: (chat) => {
-    const newChat = {
-      ...chat,
-      id: Date.now(),
-      messages: []
-    }
-    set((state) => ({
-      recentChats: [newChat, ...state.recentChats],
-      currentChatId: newChat.id
-    }))
-    return newChat.id
-  },
-  removeChat: (id) => set((state) => ({
-    recentChats: state.recentChats.filter(chat => chat.id !== id)
-  })),
-  setCurrentChat: (id) => set({ currentChatId: id }),
-  addMessage: (chatId, message) => set((state) => ({
-    recentChats: state.recentChats.map(chat => 
-      chat.id === chatId 
-        ? { ...chat, messages: [...chat.messages, { ...message, id: Date.now() }] }
-        : chat
-    )
-  }))
-}),
-{
-  name: 'chat-storage',
-}
-));
+  )
+);
