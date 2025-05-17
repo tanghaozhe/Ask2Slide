@@ -2,8 +2,8 @@ const axios = require('axios');
 
 // LLM Server configuration
 const LLM_HOST = process.env.LLM_HOST || 'localhost';
-const LLM_PORT = process.env.LLM_PORT || '8000';
-const LLM_API_URL = `http://${LLM_HOST}:${LLM_PORT}`;
+const LLM_PORT = process.env.LLM_PORT || '8080';
+const LLM_API_URL = `http://${LLM_HOST}:${LLM_PORT}/v1`;  // Local Python server uses /v1 prefix for OpenAI API
 
 // Client for making requests to the LLM service
 class LLMClient {
@@ -13,7 +13,7 @@ class LLMClient {
       headers: {
         'Content-Type': 'application/json'
       },
-      timeout: 60000 // 60 seconds timeout for LLM requests
+      timeout: 120000 // 120 seconds timeout for LLM requests (may need longer for large contexts)
     });
   }
 
@@ -34,7 +34,7 @@ class LLMClient {
           id: `fallback-${Date.now()}`,
           object: 'chat.completion',
           created: Math.floor(Date.now() / 1000),
-          model: options.model || 'Qwen/Qwen2.5-VL-7B-instruct',
+          model: options.model || 'Qwen/Qwen2.5-VL-7B-instruct',  // The model we configured
           choices: [
             {
               index: 0,

@@ -63,3 +63,6 @@ poetry.lock
 *.pyo
 *.egg-info/
 *.egg
+
+# Model file
+models/

@@ -39,34 +39,46 @@ sleep 15
 if ! docker ps | grep ask2slide-minio > /dev/null; then
     echo "Warning: MinIO container is not running. Will try to create bucket later."
 else
-    # Create the MinIO bucket using the MinIO client
     echo "Creating MinIO bucket..."
-    # Install mc client in the container if needed
     docker exec ask2slide-minio wget -q https://dl.min.io/client/mc/release/linux-amd64/mc -O /usr/bin/mc 2>/dev/null || true
     docker exec ask2slide-minio chmod +x /usr/bin/mc 2>/dev/null || true
-    
-    # Try to create bucket
     docker exec ask2slide-minio mc alias set myminio http://localhost:9010 ask2slide_minio m1n10P@ssw0rd || echo "Failed to set MinIO alias, but continuing..."
     docker exec ask2slide-minio mc mb myminio/ai-chat || echo "Failed to create MinIO bucket, but continuing..."
-    
-    # Set the bucket policy to allow public read access
     echo "Setting bucket policy..."
     docker exec ask2slide-minio mc policy set download myminio/ai-chat || echo "Failed to set bucket policy, but continuing..."
 fi
 
-# Start the LLM server 
-echo "Starting LLM server with Qwen2.5-VL model..."
-echo "Note: First startup may take several minutes to download the model..."
+# Download Qwen2.5-VL model if not present
+echo "Checking for Qwen2.5-VL model directory..."
+MODEL_DIR="./models/Qwen/Qwen2.5-VL-7B-instruct"
 
-# Check if server.py exists in llm-server directory
-if [ ! -f "llm-server/server.py" ]; then
-    echo "Error: server.py not found in llm-server directory. Please check your setup."
-    exit 1
+if [ -d "$MODEL_DIR" ]; then
+    echo "Model directory exists, skipping download."
+else
+    echo "Model directory not found. Downloading Qwen2.5-VL model (this may take 30+ minutes)..."
+    mkdir -p "$MODEL_DIR"
+    echo "----------------------------------------"
+    if docker run --rm -it \
+        -v "$(pwd)/models:/models" \
+        -e HF_HUB_ENABLE_HF_TRANSFER=0 \
+        -e HF_HUB_DISABLE_PROGRESS_BARS=0 \
+        -e PYTHONWARNINGS="ignore::UserWarning" \
+        pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime \
+        bash -c "pip install -q huggingface-hub[hf_xet] && \
+                  huggingface-cli download Qwen/Qwen2.5-VL-7B-instruct \
+                  --local-dir /models/Qwen/Qwen2.5-VL-7B-instruct \
+                  --force-download"; then
+        chmod -R 755 "$MODEL_DIR"
+        echo "Model download completed successfully."
+    else
+        echo "Download failed. Cleaning up..."
+        rm -rf "$MODEL_DIR"
+        echo "Please try again."
+        exit 1
+    fi
 fi
 
-# Start LLM server
-docker-compose up -d llm-server
-echo "LLM server started."
+# Note: The LLM server is now run directly with Python, not through Docker
 
 echo ""
 echo "Initialization complete!"
@@ -75,7 +87,7 @@ echo "Services:"
 echo " - MongoDB: mongodb://localhost:27018"
 echo " - MinIO API: http://localhost:9010"
 echo " - MinIO Console: http://localhost:9011"
-echo " - LLM Server: http://localhost:8000"
+echo " - LLM Server: http://localhost:8080 (run manually with 'python llm-server/server.py')"
 echo ""
 echo "MinIO Console Access:"
 echo " - URL: http://localhost:9011"
@@ -83,8 +95,8 @@ echo " - Username: ask2slide_minio"
 echo " - Password: m1n10P@ssw0rd"
 echo ""
 echo "API Test Commands:"
-echo " - Test LLM: curl http://localhost:8000/health"
-echo " - Full test (after model loads): curl http://localhost:8000/v1/chat/completions -H \"Content-Type: application/json\" -d '{\"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}'"
+echo " - Test LLM: curl http://localhost:8080/health"
+echo " - Full test (after model loads): curl http://localhost:8080/v1/chat/completions -H \"Content-Type: application/json\" -d '{\"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}'"
 echo " - Test Backend (after starting it): curl http://localhost:3001/health"
 echo ""
 echo "To stop all services, run: docker-compose down"
