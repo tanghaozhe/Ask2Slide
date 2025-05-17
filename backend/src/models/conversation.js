@@ -11,6 +11,16 @@ const messageSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  context: {
+    used: {
+      type: Boolean,
+      default: false
+    },
+    count: {
+      type: Number,
+      default: 0
+    }
+  },
   created_at: {
     type: Date,
     default: Date.now
@@ -30,8 +40,7 @@ const conversationSchema = new mongoose.Schema({
   },
   messages: [messageSchema],
   knowledge_base_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'KnowledgeBase',
+    type: String,
     index: true
   },
   created_at: {

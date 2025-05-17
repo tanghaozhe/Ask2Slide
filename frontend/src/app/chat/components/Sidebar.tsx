@@ -2,6 +2,7 @@
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useChatStore } from '@/store/chatStore'
+import { useDocumentStore } from '@/store/documentStore'
 import { useState } from 'react'
 
 export default function Sidebar() {
@@ -16,14 +17,53 @@ export default function Sidebar() {
   } = useChatStore()
   
   const [isCreating, setIsCreating] = useState(false);
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
+  const [newChatTitle, setNewChatTitle] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   
-  const handleNewChat = async () => {
+  // Get projects from document store
+  const { projects } = useDocumentStore();
+  
+  const handleNewChat = () => {
+    // Set default title with current time
+    setNewChatTitle(`Chat ${new Date().toLocaleString()}`);
+    // Reset selected project
+    setSelectedProjectId(null);
+    // Show the modal
+    setShowNewChatModal(true);
+  };
+  
+  // Update chat title when project is selected
+  const handleProjectSelect = (projectId: string) => {
+    setSelectedProjectId(projectId);
+    
+    // If a project is selected, update the title to include the project name
+    if (projectId) {
+      const selectedProject = projects.find(p => p.id === projectId);
+      if (selectedProject) {
+        setNewChatTitle(`${selectedProject.name} - ${new Date().toLocaleString()}`);
+      }
+    } else {
+      // Reset to default title if no project is selected
+      setNewChatTitle(`Chat ${new Date().toLocaleString()}`);
+    }
+  };
+  
+  const handleCreateChat = async () => {
     setIsCreating(true);
     try {
-      const newChatId = await createConversation(`Chat ${new Date().toLocaleString()}`);
+      // Create conversation with title and selected project
+      const newChatId = await createConversation(
+        newChatTitle || `Chat ${new Date().toLocaleString()}`,
+        selectedProjectId
+      );
+      
       if (newChatId) {
         setCurrentConversation(newChatId);
         router.push('/chat');
+        // Reset state
+        setShowNewChatModal(false);
+        setSelectedProjectId(null);
       }
     } catch (error) {
       console.error('Failed to create new chat:', error);
@@ -67,6 +107,64 @@ export default function Sidebar() {
   
   return (
     <div className="w-64 bg-white border-r border-gray-200 p-4">
+      {/* New Chat Modal */}
+      {showNewChatModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-lg shadow-lg max-w-md w-full">
+            <h3 className="text-lg font-semibold mb-4">Create New Chat</h3>
+            
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Chat Title
+              </label>
+              <input
+                type="text"
+                value={newChatTitle}
+                onChange={(e) => setNewChatTitle(e.target.value)}
+                className="w-full p-2 border rounded focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Enter chat title"
+              />
+            </div>
+            
+            <div className="mb-6">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Select Project (Optional)
+              </label>
+              <select
+                value={selectedProjectId || ''}
+                onChange={(e) => handleProjectSelect(e.target.value)}
+                className="w-full p-2 border rounded focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="">No Project (General Chat)</option>
+                {projects.map(project => (
+                  <option key={project.id} value={project.id}>
+                    {project.name} ({project.documents.length} documents)
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                Selecting a project will enable RAG with documents from that project.
+              </p>
+            </div>
+            
+            <div className="flex justify-end space-x-3">
+              <button
+                onClick={() => setShowNewChatModal(false)}
+                className="px-4 py-2 border rounded text-gray-700 hover:bg-gray-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateChat}
+                disabled={isCreating}
+                className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
+              >
+                {isCreating ? 'Creating...' : 'Create Chat'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <h2 className="text-xl font-bold mb-4">Chat Sessions</h2>
       <nav>
         <ul className="space-y-2">
@@ -117,10 +215,19 @@ export default function Sidebar() {
                     </svg>
                   </button>
                 </div>
-                <div className={`text-xs ${
-                  conv._id === currentConversationId ? 'text-blue-600' : 'text-gray-500'
-                }`}>
-                  {formatDate(conv.updated_at)}
+                <div className="flex items-center text-xs space-x-1">
+                  <span className={`${
+                    conv._id === currentConversationId ? 'text-blue-600' : 'text-gray-500'
+                  }`}>
+                    {formatDate(conv.updated_at)}
+                  </span>
+                  
+                  {/* Show project indicator if this conversation has a knowledge base */}
+                  {conv.knowledge_base_id && (
+                    <span className="px-1 bg-green-100 text-green-800 rounded text-xs">
+                      RAG
+                    </span>
+                  )}
                 </div>
               </li>
             ))

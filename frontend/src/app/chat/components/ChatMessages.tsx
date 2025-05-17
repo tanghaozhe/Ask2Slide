@@ -47,6 +47,12 @@ export default function ChatMessages() {
               <div>{msg.content}</div>
               <div className={`text-xs mt-1 ${isUser ? 'text-blue-100' : 'text-gray-500'}`}>
                 {msg.created_at ? new Date(msg.created_at).toLocaleTimeString() : 'Just now'}
+                {/* Show RAG indicator if this message has context from documents */}
+                {!isUser && msg.context && msg.context.used && (
+                  <span className="ml-2 px-1 bg-green-100 text-green-800 rounded">
+                    RAG ({msg.context.count} docs)
+                  </span>
+                )}
               </div>
             </div>
           </div>

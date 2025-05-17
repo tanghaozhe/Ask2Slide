@@ -1,5 +1,5 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Sidebar from '../chat/components/Sidebar'
 import { useDocumentStore } from '@/store/documentStore'
 
@@ -7,17 +7,21 @@ export default function LibraryPage() {
   const {
     projects,
     selectedProjectId,
+    isProcessing,
+    error,
     addProject,
     removeProject,
     selectProject,
-    addDocument,
-    removeDocument
+    removeDocument,
+    processFile,
+    processImage,
+    clearError
   } = useDocumentStore()
   
   const [newProjectName, setNewProjectName] = useState('')
-  const [isUploading, setIsUploading] = useState(false)
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [selectedUploadProject, setSelectedUploadProject] = useState('')
+  const [uploadType, setUploadType] = useState<'file' | 'image'>('file')
 
   const handleAddProject = () => {
     if (newProjectName.trim()) {
@@ -26,23 +30,38 @@ export default function LibraryPage() {
     }
   }
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && selectedUploadProject) {
-      setIsUploading(true)
-      setTimeout(() => {
-        Array.from(e.target.files!).forEach(file => {
-          addDocument(selectedUploadProject, {
-            name: file.name,
-            size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
-            type: file.type.split('/')[1].toUpperCase(),
-            uploadedAt: new Date().toLocaleDateString()
-          })
-        })
-        setIsUploading(false)
-        setShowUploadModal(false)
-      }, 1500)
+      try {
+        // Process each file
+        for (const file of Array.from(e.target.files)) {
+          if (uploadType === 'image' && !file.type.startsWith('image/')) {
+            alert('Please select image files only for image upload');
+            continue;
+          }
+          
+          // Process the file through the RAG system
+          if (uploadType === 'image') {
+            await processImage(selectedUploadProject, file);
+          } else {
+            await processFile(selectedUploadProject, file);
+          }
+        }
+        
+        // Close the modal when done
+        setShowUploadModal(false);
+      } catch (err) {
+        console.error('Upload error:', err);
+      }
     }
   }
+  
+  // Clear any errors when component unmounts
+  useEffect(() => {
+    return () => {
+      clearError();
+    };
+  }, [clearError]);
 
   const selectedProject = projects.find(p => p.id === selectedProjectId)
   
@@ -164,7 +183,7 @@ export default function LibraryPage() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
                     </svg>
                     <span className="text-sm text-gray-500">
-                      {isUploading ? 'Processing...' : 'Select files to upload'}
+                      {isProcessing ? 'Processing...' : 'Select files to upload'}
                     </span>
                   </div>
                 </label>

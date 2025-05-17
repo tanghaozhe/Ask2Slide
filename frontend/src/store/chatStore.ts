@@ -16,6 +16,10 @@ export interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
   created_at?: string;
+  context?: {
+    used: boolean;
+    count: number;
+  };
 }
 
 export interface Conversation {
@@ -37,7 +41,7 @@ interface ChatStore {
   // API actions
   fetchConversations: (userId?: string) => Promise<void>;
   fetchConversation: (id: string) => Promise<Conversation | null>;
-  createConversation: (title?: string) => Promise<string | null>;
+  createConversation: (title?: string, knowledgeBaseId?: string | null) => Promise<string | null>;
   sendMessage: (message: string, conversationId?: string) => Promise<void>;
   deleteConversation: (id: string) => Promise<void>;
   
@@ -94,12 +98,13 @@ export const useChatStore = create<ChatStore>()(
         }
       },
       
-      createConversation: async (title = 'New Conversation') => {
+      createConversation: async (title = 'New Conversation', knowledgeBaseId = null) => {
         set({ isLoading: true, error: null });
         try {
           const response = await axios.post(API.CREATE_CONVERSATION, {
             title,
-            user_id: 'default_user' // In a real app, get from authentication
+            user_id: 'default_user', // In a real app, get from authentication
+            knowledge_base_id: knowledgeBaseId
           });
           
           // Add the new conversation to the store
@@ -164,11 +169,16 @@ export const useChatStore = create<ChatStore>()(
             }));
           }
           
+          // Get the current knowledge base ID if we're creating a new conversation
+          // This allows us to link a new conversation to a knowledge base
+          const selectedProject = localStorage.getItem('selectedProjectId');
+          
           // Send to API
           const response = await axios.post(API.SEND_MESSAGE, {
             conversation_id: currentId,
             message: message,
-            user_id: 'default_user' // In a real app, get from authentication
+            user_id: 'default_user', // In a real app, get from authentication
+            knowledge_base_id: currentId ? undefined : selectedProject // Only set for new conversations
           });
           
           // Update with actual response
@@ -181,7 +191,8 @@ export const useChatStore = create<ChatStore>()(
                       ...conv,
                       messages: [...conv.messages, { 
                         role: 'assistant', 
-                        content: response.data.message 
+                        content: response.data.message,
+                        context: response.data.context
                       }],
                       updated_at: response.data.updated_at
                     }
@@ -201,7 +212,8 @@ export const useChatStore = create<ChatStore>()(
                       _id: realId,
                       messages: [...conv.messages, { 
                         role: 'assistant', 
-                        content: response.data.message 
+                        content: response.data.message,
+                        context: response.data.context
                       }],
                       updated_at: response.data.updated_at
                     }
