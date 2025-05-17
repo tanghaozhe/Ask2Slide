@@ -50,7 +50,7 @@ class LLMClient {
       }
 
       // Proceed with the normal request if the model is ready
-      const response = await this.client.post('/v1/chat/completions', {
+      const response = await this.client.post('/chat/completions', {
         messages,
         model: options.model || 'Qwen/Qwen2.5-VL-7B-instruct',
         max_tokens: options.max_tokens || 1024,
@@ -94,7 +94,7 @@ class LLMClient {
    */
   async getEmbeddings(text) {
     try {
-      const response = await this.client.post('/v1/embeddings', {
+      const response = await this.client.post('/embeddings', {
         input: text,
         model: 'Qwen/Qwen2.5-VL-7B-instruct'
       });
@@ -112,7 +112,8 @@ class LLMClient {
    */
   async isModelReady() {
     try {
-      const response = await this.client.get('/health');
+      // Remove /v1 prefix for health endpoint
+      const response = await axios.get(`http://${LLM_HOST}:${LLM_PORT}/health`);
       // Check if the status is "ready", not just if the request succeeded
       return response.data && response.data.status === 'ready';
     } catch (error) {
@@ -127,7 +128,8 @@ class LLMClient {
    */
   async healthCheck() {
     try {
-      const response = await this.client.get('/health');
+      // Remove /v1 prefix for health endpoint
+      const response = await axios.get(`http://${LLM_HOST}:${LLM_PORT}/health`);
       return response.status === 200;
     } catch (error) {
       console.error('LLM Health Check Failed:', error.message);
