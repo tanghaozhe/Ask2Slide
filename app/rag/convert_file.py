@@ -1,3 +1,5 @@
+import asyncio
+import io
 import logging
 import os
 import uuid
@@ -12,6 +14,7 @@ from pymilvus import Collection, connections
 from tqdm import tqdm
 
 from app.core.config import settings
+from app.db.minio import async_minio_manager
 from app.rag.colbert_service import colbert, logger
 
 # Configure logging
@@ -496,3 +499,61 @@ class DocumentProcessor:
 
 # Initialize the document processor
 document_processor = DocumentProcessor()
+
+
+async def convert_file_to_images(file_content: bytes):
+    """
+    Convert a file (PDF) to a list of image buffers
+    Returns list of BytesIO objects containing images
+    """
+    # Create a temporary file for PDF processing
+    with io.BytesIO(file_content) as pdf_buffer:
+        try:
+            # Convert PDF pages to list of PIL images
+            images = pdf2image.convert_from_bytes(
+                pdf_buffer.read(),
+                dpi=200,
+                fmt="png",
+            )
+            logger.info(f"Converted PDF to {len(images)} pages/images")
+
+            # Convert PIL images to BytesIO buffers
+            image_buffers = []
+            for img in images:
+                buffer = io.BytesIO()
+                img.save(buffer, format="PNG")
+                buffer.seek(0)
+                image_buffers.append(buffer)
+
+            return image_buffers
+        except Exception as e:
+            logger.error(f"Error converting PDF to images: {e}")
+            raise
+
+
+async def save_image_to_minio(
+    username: str, original_filename: str, image_buffer: io.BytesIO
+):
+    """
+    Save an image buffer to MinIO and return the filename and URL
+    """
+    try:
+        # Generate a unique filename
+        base_name = Path(original_filename).stem
+        ext = ".png"
+        unique_name = f"{base_name}_{uuid.uuid4()}{ext}"
+
+        # Define the user's folder path
+        folder = f"users/{username}/images"
+        filename = f"{folder}/{unique_name}"
+
+        # Upload to MinIO
+        await async_minio_manager.upload_image(filename, image_buffer)
+
+        # Generate a URL
+        url = await async_minio_manager.create_presigned_url(filename)
+
+        return filename, url
+    except Exception as e:
+        logger.error(f"Error saving image to MinIO: {e}")
+        raise

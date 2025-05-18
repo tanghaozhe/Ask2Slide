@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Model paths
-    colbert_model_path: str = "vidore/colqwen2.5-v0.2"
+    colbert_model_path: str = "Qwen/Qwen2.5-VL-7B-instruct"
 
     # MongoDB settings
     mongodb_uri: str = "mongodb://localhost:27017"

@@ -16,6 +16,18 @@ from app.db.minio import async_minio_manager
 from app.rag.colbert_service import colbert
 from app.rag.convert_file import document_processor
 
+# ARCHITECTURE NOTE:
+# This API server provides embedding endpoints that are consumed by the newer async implementation
+# in app/rag/process_file.py and app/rag/get_embedding.py.
+#
+# The core functionality is:
+# 1. app/rag/colbert_service.py - Handles direct model inference with the ColBERT model
+# 2. app/core/model_server.py (this file) - Exposes the model as HTTP endpoints
+# 3. app/rag/get_embedding.py - Provides async HTTP client to communicate with this server
+# 4. app/rag/process_file.py - Uses the HTTP client for the full processing pipeline
+#
+# Both implementations (direct and HTTP-based) are currently used in the system.
+
 app = FastAPI(title="Ask2Slide RAG API Server")
 service = colbert  # Single instance loading
 
@@ -159,23 +171,21 @@ async def search(request: SearchRequest):
 @app.post("/hybrid_search")
 async def hybrid_search(request: SearchRequest):
     """
-    Hybrid search combining dense and sparse retrieval
+    Search endpoint that returns top-k most similar documents based on vector similarity
 
-    This endpoint combines multiple retrieval approaches:
-    1. Dense embedding-based retrieval (via ColBERT)
-    2. Keyword-based matching
-    3. Document structure analysis
-
-    For PDF-based search, visual features from PDF pages are considered
+    This endpoint uses pure vector similarity search without additional re-ranking:
+    - Uses ColBERT vector embeddings to find similar content
+    - Returns top-k results based only on vector similarity
+    - No additional re-ranking or hybrid logic is applied
     """
     try:
         # Log the search request
         logger.info(
-            f"Hybrid search request: {request.query} in KB {request.kb_id}, top_k={request.top_k}"
+            f"Search request: {request.query} in KB {request.kb_id}, top_k={request.top_k}"
         )
 
-        # Perform the hybrid search using ColBERT service
-        results = service.hybrid_search(request.query, request.kb_id, request.top_k)
+        # Perform simple search using ColBERT service (without hybrid re-ranking)
+        results = service.search(request.query, request.kb_id, request.top_k)
 
         # Enhance results with additional context
         for result in results:
@@ -201,7 +211,7 @@ async def hybrid_search(request: SearchRequest):
         logger.info(f"Returning {len(results)} search results")
         return {"results": results}
     except Exception as e:
-        logger.error(f"Error in hybrid search: {e}")
+        logger.error(f"Error in search: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

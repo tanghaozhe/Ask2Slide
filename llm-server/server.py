@@ -3,6 +3,8 @@
 FastAPI server for Qwen model with multimodal RAG capabilities
 """
 
+import io
+import json
 import logging
 import os
 import time
@@ -16,7 +18,14 @@ import torch
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from pymilvus import Collection, connections
+from pymilvus import (
+    Collection,
+    CollectionSchema,
+    DataType,
+    FieldSchema,
+    connections,
+    utility,
+)
 from transformers import (
     AutoModel,
     AutoModelForCausalLM,
@@ -55,37 +64,105 @@ model = None
 tokenizer = None
 processor = None
 
-# Initialize Milvus connection
-connections.connect("default", host="localhost", port="19530")
 
-# Create collection if it doesn't exist
-from pymilvus import CollectionSchema, DataType, FieldSchema, utility
+# Define a function to connect to Milvus with retries
+def connect_to_milvus(max_retries=10, retry_interval=5):
+    host = os.environ.get("MILVUS_HOST", "localhost")
+    port = os.environ.get("MILVUS_PORT", "19530")
 
-if not utility.has_collection("image_embeddings"):
-    # Define schema
-    file_id = FieldSchema(
-        name="file_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True
-    )
-    embedding = FieldSchema(
-        name="embedding",
-        dtype=DataType.FLOAT_VECTOR,
-        dim=1024,  # Adjust based on your model's output dimension
-    )
-    schema = CollectionSchema(
-        fields=[file_id, embedding], description="Image embeddings collection"
-    )
-    image_collection = Collection("image_embeddings", schema)
-    # Create index for efficient search
-    index_params = {
-        "metric_type": "L2",
-        "index_type": "IVF_FLAT",
-        "params": {"nlist": 128},
-    }
-    image_collection.create_index("embedding", index_params)
-else:
-    image_collection = Collection("image_embeddings")
-    # Load collection for search
-    image_collection.load()
+    for attempt in range(max_retries):
+        try:
+            logger.info(
+                f"Attempting to connect to Milvus at {host}:{port} (attempt {attempt+1}/{max_retries})..."
+            )
+            connections.connect(
+                "default",
+                host=host,
+                port=port,
+                timeout=30.0,  # Increase timeout for initialization
+            )
+            # Check if connection is successful with a simple operation
+            try:
+                utility.has_collection("test_connection")
+                logger.info(f"Successfully connected to Milvus at {host}:{port}")
+                return True
+            except Exception as e:
+                # This exception is normal if the collection doesn't exist
+                if "collection not found" in str(e).lower():
+                    logger.info(f"Successfully connected to Milvus at {host}:{port}")
+                    return True
+                raise
+        except Exception as e:
+            logger.warning(f"Milvus connection attempt {attempt+1} failed: {e}")
+            if attempt < max_retries - 1:
+                logger.info(f"Retrying in {retry_interval} seconds...")
+                time.sleep(retry_interval)
+            else:
+                logger.error(
+                    f"Failed to connect to Milvus after {max_retries} attempts"
+                )
+                return False
+
+
+# Try to initialize Milvus connection - using mock if it fails
+try:
+    if connect_to_milvus():
+        # Create collection if it doesn't exist
+        if not utility.has_collection("image_embeddings"):
+            # Define schema
+            file_id = FieldSchema(
+                name="file_id", dtype=DataType.VARCHAR, max_length=64, is_primary=True
+            )
+            embedding = FieldSchema(
+                name="embedding",
+                dtype=DataType.FLOAT_VECTOR,
+                dim=1024,  # Adjust based on your model's output dimension
+            )
+            schema = CollectionSchema(
+                fields=[file_id, embedding], description="Image embeddings collection"
+            )
+            image_collection = Collection("image_embeddings", schema)
+            # Create index for efficient search
+            index_params = {
+                "metric_type": "L2",
+                "index_type": "IVF_FLAT",
+                "params": {"nlist": 128},
+            }
+            image_collection.create_index("embedding", index_params)
+        else:
+            image_collection = Collection("image_embeddings")
+            # Load collection for search
+            image_collection.load()
+
+        USE_MOCK_MILVUS = False
+    else:
+        raise ConnectionError(
+            "Failed to establish connection to Milvus after multiple attempts"
+        )
+except Exception as e:
+    logger.warning(f"Failed to connect to Milvus: {e}")
+    logger.warning("Using mock implementation for development")
+    USE_MOCK_MILVUS = True
+
+    # Mock implementation of image_collection for development
+    class MockCollection:
+        def insert(self, entities):
+            logger.info(f"MOCK: Inserted {len(entities[0])} entities to Milvus")
+            return True
+
+        def search(self, data, anns_field, param, limit, output_fields):
+            logger.info(f"MOCK: Searching for similar vectors, limit={limit}")
+
+            # Create mock results
+            class MockHit:
+                def __init__(self, id):
+                    self.id = f"mock_id_{id}"
+                    self.entity = {"file_id": f"mock_file_{id}"}
+                    self.score = 0.95 - (id * 0.1)
+
+            return [[MockHit(i) for i in range(limit)]]
+
+    image_collection = MockCollection()
 
 
 class ImageEmbeddingService:

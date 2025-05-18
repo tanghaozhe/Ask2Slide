@@ -15,6 +15,9 @@ from app.core.config import settings
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Set to True to force mock embeddings (for development/testing)
+FORCE_MOCK_MODE = True
+
 # Initialize Milvus utility
 try:
     utility = utility
@@ -68,6 +71,9 @@ class ColBERTService:
 
     def _is_model_loaded(self) -> bool:
         """Check if models are loaded properly"""
+        if FORCE_MOCK_MODE:
+            logger.info("Using mock embeddings mode (forced by configuration)")
+            return False
         return self.model is not None and self.processor is not None
 
     def process_query(self, queries: List[str]) -> List[List[float]]:
@@ -325,65 +331,6 @@ class ColBERTService:
                 }
             )
         return search_results
-
-    def hybrid_search(self, query: str, kb_id: str, top_k: int = 5) -> List[Dict]:
-        """
-        Hybrid search combining dense and sparse retrieval
-
-        1. First retrieves 50 candidate snippets through vector similarity
-        2. Then re-ranks them using both keyword matching and document structure analysis
-        3. Returns the top_k most relevant items
-        """
-        logger.info(f"Performing hybrid search for '{query}' in knowledge base {kb_id}")
-
-        try:
-            # Step 1: Get more candidates than needed (50 instead of top_k)
-            # This gives us a larger pool to re-rank
-            candidates = self.search(query, kb_id, top_k=50)
-
-            if not candidates:
-                return self._mock_search_results(query, top_k)
-
-            # Step 2: Re-rank using keyword matching as a complementary signal
-            # Simple term overlap score based on query words
-            query_terms = set(query.lower().split())
-
-            for candidate in candidates:
-                # Calculate term overlap score
-                text = candidate.get("text", "").lower()
-                term_overlap = sum(1 for term in query_terms if term in text)
-                term_score = term_overlap / max(1, len(query_terms))
-
-                # Consider document structure from metadata
-                metadata = candidate.get("metadata", {})
-
-                # Prioritize earlier pages for common queries
-                page_num = metadata.get("page", 1)
-                if "summary" in query.lower() or "introduction" in query.lower():
-                    # For summary requests, prioritize early pages
-                    page_boost = 1.0 - (page_num / 100) if page_num else 0
-                else:
-                    # No page boost for other queries
-                    page_boost = 0
-
-                # Combine signals: vector similarity (70%) + keyword match (20%) + structure (10%)
-                vector_score = candidate.get("score", 0.5)
-                hybrid_score = (
-                    (0.7 * vector_score) + (0.2 * term_score) + (0.1 * page_boost)
-                )
-
-                # Update the score
-                candidate["score"] = hybrid_score
-
-            # Step 3: Sort by the new hybrid score and take top_k
-            results = sorted(candidates, key=lambda x: x["score"], reverse=True)[:top_k]
-
-            logger.info(f"Hybrid search returned {len(results)} re-ranked results")
-            return results
-
-        except Exception as e:
-            logger.error(f"Error in hybrid search: {e}")
-            return self._mock_search_results(query, top_k)
 
 
 # Initialize the ColBERT service
