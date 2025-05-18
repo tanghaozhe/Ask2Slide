@@ -6,7 +6,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # Model paths
-    colbert_model_path: str = "Qwen/Qwen2.5-VL-7B-instruct"
+    colbert_model_path: str = "vidore/colqwen2.5-v0.2"
 
     # MongoDB settings
     mongodb_uri: str = "mongodb://localhost:27017"
@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     # Milvus settings
     milvus_host: str = "localhost"
     milvus_port: str = "19530"
+
+    # MinIO settings
+    minio_url: str = "http://localhost:9010"
+    minio_access_key: str = "ask2slide_minio"
+    minio_secret_key: str = "m1n10P@ssw0rd"
+    minio_bucket_name: str = "ai-chat"
 
     # Document processing
     chunk_size: int = 1024

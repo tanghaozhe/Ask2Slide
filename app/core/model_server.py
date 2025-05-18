@@ -10,15 +10,55 @@ from PIL import Image
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.core.logging import logger
+from app.db.milvus import milvus_manager
+from app.db.minio import async_minio_manager
 from app.rag.colbert_service import colbert
 from app.rag.convert_file import document_processor
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 app = FastAPI(title="Ask2Slide RAG API Server")
 service = colbert  # Single instance loading
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services when the application starts"""
+    logger.info("Initializing services on application startup...")
+
+    # Initialize Milvus
+    if milvus_manager.init_milvus():
+        logger.info("Milvus connection established successfully")
+    else:
+        logger.warning(
+            "Failed to connect to Milvus, some features may not work properly"
+        )
+
+    # Initialize MinIO
+    try:
+        await async_minio_manager.init_minio()
+        logger.info("MinIO connection established successfully")
+    except Exception as e:
+        logger.warning(f"Failed to initialize MinIO: {e}")
+        logger.warning("File storage features may not work properly")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Clean up resources when the application shuts down"""
+    logger.info("Shutting down services...")
+
+    # Close Milvus connection
+    try:
+        from pymilvus import connections
+
+        connections.disconnect("default")
+        logger.info("Milvus connection closed")
+    except Exception as e:
+        logger.warning(f"Error closing Milvus connection: {e}")
+
+    # No explicit cleanup needed for MinIO as it uses session-based connections
+    logger.info("All services shut down successfully")
+
 
 # Add CORS middleware
 app.add_middleware(
