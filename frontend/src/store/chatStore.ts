@@ -32,6 +32,14 @@ export interface Conversation {
   updated_at: string;
 }
 
+// Helper function to ensure messages is always an array
+const ensureMessagesArray = (messages: any): Message[] => {
+  if (Array.isArray(messages)) {
+    return messages;
+  }
+  return [];
+};
+
 interface ChatStore {
   conversations: Conversation[];
   currentConversationId: string | null;
@@ -64,7 +72,12 @@ export const useChatStore = create<ChatStore>()(
         set({ isLoading: true, error: null });
         try {
           const response = await axios.get(`${API.GET_CONVERSATIONS}?user_id=${userId}`);
-          set({ conversations: response.data, isLoading: false });
+          // Ensure each conversation has a messages array
+          const conversations = response.data.map((conv: any) => ({
+            ...conv,
+            messages: ensureMessagesArray(conv.messages)
+          }));
+          set({ conversations, isLoading: false });
         } catch (error) {
           console.error('Error fetching conversations:', error);
           set({ 
@@ -79,15 +92,21 @@ export const useChatStore = create<ChatStore>()(
         try {
           const response = await axios.get(`${API.GET_CONVERSATION}/${id}`);
           
+          // Make sure messages is an array
+          const conversation = {
+            ...response.data,
+            messages: ensureMessagesArray(response.data.messages)
+          };
+          
           // Update the conversation in the store
           set((state) => ({
             conversations: state.conversations.map(conv => 
-              conv._id === id ? response.data : conv
+              conv._id === id ? conversation : conv
             ),
             isLoading: false
           }));
           
-          return response.data;
+          return conversation;
         } catch (error) {
           console.error('Error fetching conversation:', error);
           set({ 
@@ -107,14 +126,20 @@ export const useChatStore = create<ChatStore>()(
             knowledge_base_id: knowledgeBaseId
           });
           
+          // Make sure the new conversation has a messages array
+          const newConversation = {
+            ...response.data,
+            messages: ensureMessagesArray(response.data.messages)
+          };
+          
           // Add the new conversation to the store
           set((state) => ({
-            conversations: [response.data, ...state.conversations],
-            currentConversationId: response.data._id,
+            conversations: [newConversation, ...state.conversations],
+            currentConversationId: newConversation._id,
             isLoading: false
           }));
           
-          return response.data._id;
+          return newConversation._id;
         } catch (error) {
           console.error('Error creating conversation:', error);
           set({ 
@@ -146,7 +171,7 @@ export const useChatStore = create<ChatStore>()(
                 conv._id === currentId 
                   ? { 
                       ...conv,
-                      messages: [...conv.messages, { role: 'user', content: message }],
+                      messages: [...ensureMessagesArray(conv.messages), { role: 'user', content: message }],
                       updated_at: new Date().toISOString()
                     }
                   : conv
@@ -189,7 +214,7 @@ export const useChatStore = create<ChatStore>()(
                 conv._id === currentId 
                   ? { 
                       ...conv,
-                      messages: [...conv.messages, { 
+                      messages: [...ensureMessagesArray(conv.messages), { 
                         role: 'assistant', 
                         content: response.data.message,
                         context: response.data.context
@@ -210,7 +235,7 @@ export const useChatStore = create<ChatStore>()(
                   ? { 
                       ...conv,
                       _id: realId,
-                      messages: [...conv.messages, { 
+                      messages: [...ensureMessagesArray(conv.messages), { 
                         role: 'assistant', 
                         content: response.data.message,
                         context: response.data.context
@@ -252,6 +277,7 @@ export const useChatStore = create<ChatStore>()(
         }
       },
       
+      // State setters
       setCurrentConversation: (id) => set({ currentConversationId: id }),
       setLoading: (isLoading) => set({ isLoading }),
       setError: (error) => set({ error }),
@@ -261,8 +287,8 @@ export const useChatStore = create<ChatStore>()(
       name: 'chat-storage',
       partialize: (state) => ({
         conversations: state.conversations,
-        currentConversationId: state.currentConversationId
-      })
+        currentConversationId: state.currentConversationId,
+      }),
     }
   )
 );

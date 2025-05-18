@@ -158,9 +158,47 @@ async def search(request: SearchRequest):
 
 @app.post("/hybrid_search")
 async def hybrid_search(request: SearchRequest):
-    """Hybrid search combining dense and sparse retrieval"""
+    """
+    Hybrid search combining dense and sparse retrieval
+
+    This endpoint combines multiple retrieval approaches:
+    1. Dense embedding-based retrieval (via ColBERT)
+    2. Keyword-based matching
+    3. Document structure analysis
+
+    For PDF-based search, visual features from PDF pages are considered
+    """
     try:
+        # Log the search request
+        logger.info(
+            f"Hybrid search request: {request.query} in KB {request.kb_id}, top_k={request.top_k}"
+        )
+
+        # Perform the hybrid search using ColBERT service
         results = service.hybrid_search(request.query, request.kb_id, request.top_k)
+
+        # Enhance results with additional context
+        for result in results:
+            # If the result is a PDF page, try to get the image URL
+            if result.get("metadata", {}).get("source") == "pdf":
+                try:
+                    # Get the document and chunk info from MongoDB
+                    from app.rag.convert_file import chunks_collection, docs_collection
+
+                    if chunks_collection and docs_collection:
+                        chunk = chunks_collection.find_one({"_id": result["chunk_id"]})
+                        if chunk and "image_path" in chunk:
+                            # Add image path to result
+                            result["image_path"] = chunk["image_path"]
+
+                        # Get document metadata
+                        doc = docs_collection.find_one({"_id": result["doc_id"]})
+                        if doc:
+                            result["filename"] = doc.get("filename")
+                except Exception as e:
+                    logger.error(f"Error enhancing result with MongoDB data: {e}")
+
+        logger.info(f"Returning {len(results)} search results")
         return {"results": results}
     except Exception as e:
         logger.error(f"Error in hybrid search: {e}")

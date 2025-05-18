@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
+import pdf2image  # Add pdf2image for PDF to image conversion
 import pymongo
 from PIL import Image
 from pymilvus import Collection, connections
@@ -46,6 +47,9 @@ class DocumentProcessor:
     def __init__(self):
         self.upload_dir = Path(settings.upload_dir)
         self.upload_dir.mkdir(exist_ok=True)
+        # Create a directory for PDF page images
+        self.pdf_images_dir = self.upload_dir / "pdf_images"
+        self.pdf_images_dir.mkdir(exist_ok=True)
 
     def process_file(
         self,
@@ -88,16 +92,105 @@ class DocumentProcessor:
         else:
             logger.warning("MongoDB not available, skipping document metadata storage")
 
-        # Split text into chunks
-        chunk_size = chunk_size or settings.chunk_size
-        chunk_overlap = chunk_overlap or settings.chunk_overlap
-        chunks = self._split_text(text, chunk_size, chunk_overlap)
-        logger.info(f"Split text into {len(chunks)} chunks")
+        # For PDFs, process each page as an image
+        if file_path.suffix.lower() == ".pdf":
+            logger.info(f"Processing PDF file: {filename}")
+            self._process_pdf_as_images(file_path, doc_id, kb_id)
+        else:
+            # For non-PDF files, continue with text chunking
+            # Split text into chunks
+            chunk_size = chunk_size or settings.chunk_size
+            chunk_overlap = chunk_overlap or settings.chunk_overlap
+            chunks = self._split_text(text, chunk_size, chunk_overlap)
+            logger.info(f"Split text into {len(chunks)} chunks")
 
-        # Process chunks
-        self._process_chunks(chunks, doc_id, kb_id)
+            # Process chunks
+            self._process_chunks(chunks, doc_id, kb_id)
 
         return doc_id
+
+    def _process_pdf_as_images(self, pdf_path: Path, doc_id: str, kb_id: str) -> None:
+        """Process a PDF file by converting each page to an image and embedding it"""
+        try:
+            logger.info(f"Converting PDF to images: {pdf_path}")
+
+            # Convert PDF to list of PIL Image objects
+            pdf_images = pdf2image.convert_from_path(
+                pdf_path,
+                dpi=200,  # Reasonable resolution for document processing
+                fmt="png",
+            )
+
+            logger.info(f"Converted PDF to {len(pdf_images)} pages/images")
+
+            # Create a subdirectory for this document's images
+            doc_image_dir = self.pdf_images_dir / doc_id
+            doc_image_dir.mkdir(exist_ok=True)
+
+            # Process each page image
+            for i, image in enumerate(pdf_images):
+                page_num = i + 1
+                image_filename = f"{doc_id}_page_{page_num}.png"
+                image_path = doc_image_dir / image_filename
+
+                # Save image to disk
+                image.save(image_path)
+                logger.info(f"Saved PDF page {page_num} as image: {image_path}")
+
+                # Create page metadata
+                page_metadata = {
+                    "source_file": pdf_path.name,
+                    "page_number": page_num,
+                    "total_pages": len(pdf_images),
+                    "width": image.width,
+                    "height": image.height,
+                    "type": "pdf_page",
+                    "format": "png",
+                }
+
+                # Process image embedding
+                try:
+                    # Generate embedding using ColBERT model
+                    embeddings = colbert.process_image([image])
+
+                    # Ensure Milvus collection exists
+                    colbert.create_kb_collection(kb_id)
+
+                    # Store embedding in Milvus
+                    collection_name = f"colqwen_{kb_id}"
+                    collection = Collection(collection_name)
+
+                    # Insert embedding with unique chunk ID
+                    chunk_id = str(uuid.uuid4())
+
+                    entities = [
+                        [chunk_id],  # chunk_id
+                        [doc_id],  # doc_id
+                        embeddings,  # embedding
+                    ]
+                    collection.insert(entities)
+                    logger.info(f"Stored PDF page {page_num} embedding in Milvus")
+
+                    # Store page metadata in MongoDB
+                    if chunks_collection:
+                        chunks_collection.insert_one(
+                            {
+                                "_id": chunk_id,
+                                "doc_id": doc_id,
+                                "kb_id": kb_id,
+                                "type": "pdf_page",
+                                "page_number": page_num,
+                                "image_path": str(image_path),
+                                "metadata": page_metadata,
+                            }
+                        )
+                        logger.info(f"Stored PDF page {page_num} metadata in MongoDB")
+
+                except Exception as e:
+                    logger.error(f"Error processing PDF page {page_num}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error converting PDF to images: {e}")
 
     def process_image(
         self,
@@ -235,12 +328,45 @@ class DocumentProcessor:
     def _extract_from_pdf(self, file_path: Path) -> Tuple[str, Dict]:
         """Extract text and metadata from a PDF file"""
         try:
-            # This is a placeholder - in a real implementation, you would use a library like PyPDF2 or pdfplumber
-            # For now, we'll just return a placeholder
-            return f"Text extracted from PDF: {file_path.name}", {
-                "type": "pdf",
-                "pages": 1,
-            }
+            # Import PyPDF2 here to avoid dependency issues if not installed
+            import PyPDF2
+
+            # Open the PDF file
+            with open(file_path, "rb") as f:
+                pdf_reader = PyPDF2.PdfReader(f)
+                num_pages = len(pdf_reader.pages)
+
+                # Extract text from all pages
+                text = ""
+                for page_num in range(num_pages):
+                    page = pdf_reader.pages[page_num]
+                    text += page.extract_text() + "\n\n"
+
+                # Extract metadata
+                info = pdf_reader.metadata
+                metadata = {
+                    "type": "pdf",
+                    "pages": num_pages,
+                    "title": info.title if info.title else None,
+                    "author": info.author if info.author else None,
+                    "subject": info.subject if info.subject else None,
+                    "creator": info.creator if info.creator else None,
+                    "producer": info.producer if info.producer else None,
+                }
+
+                return text, metadata
+
+        except ImportError:
+            logger.warning("PyPDF2 not installed. Using basic PDF metadata extraction.")
+            # Use pdf2image to count pages
+            try:
+                images = pdf2image.convert_from_path(
+                    file_path, dpi=72, first_page=1, last_page=1
+                )
+                return "", {"type": "pdf", "pages": len(images)}
+            except Exception as e:
+                logger.error(f"Error counting PDF pages: {e}")
+                return "", {"type": "pdf", "pages": 1}
         except Exception as e:
             logger.error(f"Error extracting text from PDF: {e}")
             return "", {"error": str(e)}
@@ -248,8 +374,25 @@ class DocumentProcessor:
     def _extract_from_docx(self, file_path: Path) -> Tuple[str, Dict]:
         """Extract text and metadata from a DOCX file"""
         try:
-            # This is a placeholder - in a real implementation, you would use a library like python-docx
-            # For now, we'll just return a placeholder
+            # Import python-docx here to avoid dependency issues if not installed
+            import docx
+
+            doc = docx.Document(file_path)
+
+            # Extract text from paragraphs
+            text = "\n".join([para.text for para in doc.paragraphs])
+
+            # Extract basic metadata
+            metadata = {
+                "type": "docx",
+                "paragraphs": len(doc.paragraphs),
+                "sections": len(doc.sections),
+            }
+
+            return text, metadata
+
+        except ImportError:
+            logger.warning("python-docx not installed. Using placeholder text.")
             return f"Text extracted from DOCX: {file_path.name}", {
                 "type": "docx",
                 "pages": 1,
@@ -333,21 +476,22 @@ class DocumentProcessor:
                     else:
                         logger.warning("MongoDB not available, skipping chunk storage")
 
-                # Store embeddings in Milvus
-                try:
-                    entities = [
-                        chunk_ids,  # chunk_id
-                        doc_ids,  # doc_id
-                        embeddings,  # embedding
-                    ]
-                    collection.insert(entities)
-                    logger.info(f"Stored {len(chunk_ids)} embeddings in Milvus")
-                except Exception as e:
-                    logger.error(f"Error storing embeddings in Milvus: {e}")
+                # Insert all embeddings at once
+                if chunk_ids:
+                    try:
+                        entities = [
+                            chunk_ids,  # chunk_id
+                            doc_ids,  # doc_id
+                            embeddings,  # embedding
+                        ]
+                        collection.insert(entities)
+                        logger.info(f"Stored {len(chunks)} embeddings in Milvus")
+                    except Exception as e:
+                        logger.error(f"Error storing embeddings in Milvus: {e}")
             except Exception as e:
-                logger.error(f"Error with Milvus collection: {e}")
+                logger.error(f"Error preparing Milvus collection: {e}")
         except Exception as e:
-            logger.error(f"Error processing chunks: {e}")
+            logger.error(f"Error generating embeddings: {e}")
 
 
 # Initialize the document processor

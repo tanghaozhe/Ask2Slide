@@ -29,6 +29,11 @@ pymongo = "^4.6.1"
 pillow = "^10.2.0"
 tqdm = "^4.66.1"
 pydantic-settings = "^2.2.1"
+pdf2image = "^1.16.3"  # For PDF to image conversion
+PyPDF2 = "^3.0.1"  # For PDF text extraction
+python-docx = "^1.0.1"  # For DOCX text extraction
+aioboto3 = "^11.3.0"  # For async S3/MinIO operations
+sentence-transformers = "^2.3.1"  # For embedding generation
 
 [tool.poetry.extras]
 gpu = ["vllm"]

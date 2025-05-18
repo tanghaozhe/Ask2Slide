@@ -33,9 +33,14 @@ export default function ChatMessages() {
     );
   }
   
+  // Ensure messages array exists, otherwise use an empty array
+  const messages = Array.isArray(currentConversation.messages) 
+    ? currentConversation.messages 
+    : [];
+  
   return (
     <div className="flex-1 overflow-y-auto p-4">
-      {currentConversation?.messages?.map((msg, index) => {
+      {messages.map((msg, index) => {
         // Determine if the message is from the user
         const isUser = msg.role === 'user';
         
